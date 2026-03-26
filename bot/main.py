@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 from dataclasses import dataclass, field
 from typing import Dict, List
 
@@ -25,10 +26,14 @@ logger = logging.getLogger(__name__)
 class UserBrief:
     texts: List[str] = field(default_factory=list)
     image_urls: List[str] = field(default_factory=list)
+    generated_variants: List[str] = field(default_factory=list)
+    approved_variants: List[str] = field(default_factory=list)
 
     def reset(self) -> None:
         self.texts.clear()
         self.image_urls.clear()
+        self.generated_variants.clear()
+        self.approved_variants.clear()
 
 
 USER_DATA: Dict[int, UserBrief] = {}
@@ -59,7 +64,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "3) Виконай /generate для отримання варіантів.\n\n"
         "Команди:\n"
         "/new — очистити поточний контекст\n"
-        "/generate — згенерувати креативи"
+        "/generate — згенерувати креативи\n"
+        "/approve N — затвердити варіант (наприклад /approve 1)\n"
+        "/carousel — зібрати карусель із затверджених креативів"
     )
 
 
@@ -158,6 +165,13 @@ def build_openai_prompt(brief: UserBrief, variants: int) -> str:
     )
 
 
+def split_variants(raw_text: str) -> List[str]:
+    chunks = [item.strip() for item in re.split(r"\n(?=\d+[.)]\s)", raw_text) if item.strip()]
+    if len(chunks) <= 1:
+        chunks = [item.strip() for item in re.split(r"\n\s*\n", raw_text) if item.strip()]
+    return chunks if chunks else [raw_text.strip()]
+
+
 def generate_creatives(client: OpenAI, model: str, brief: UserBrief, variants: int) -> str:
     content: List[dict] = [
         {
@@ -181,6 +195,33 @@ def generate_creatives(client: OpenAI, model: str, brief: UserBrief, variants: i
         input=[{"role": "user", "content": content}],
     )
 
+    return response.output_text.strip()
+
+
+def generate_carousel(client: OpenAI, model: str, brief: UserBrief) -> str:
+    approved = "\n\n".join(
+        f"Креатив {i + 1}:\n{item}" for i, item in enumerate(brief.approved_variants)
+    )
+    prompt = (
+        "Створи Instagram-карусель на базі затверджених креативів.\n"
+        "Дай 5-8 слайдів. Для кожного слайду вкажи:\n"
+        "1) Заголовок слайду\n"
+        "2) Текст на слайді (коротко)\n"
+        "3) Ідею візуалу (композиція/акцент)\n"
+        "4) Примітку для дизайнера\n\n"
+        "Затверджені креативи:\n"
+        f"{approved}\n\n"
+        "Відповідай українською мовою."
+    )
+
+    content: List[dict] = [{"type": "input_text", "text": prompt}]
+    for image_url in brief.image_urls:
+        content.append({"type": "input_image", "image_url": image_url})
+
+    response = client.responses.create(
+        model=model,
+        input=[{"role": "user", "content": content}],
+    )
     return response.output_text.strip()
 
 
@@ -216,6 +257,78 @@ async def generate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
         return
 
+    brief.generated_variants = split_variants(result)
+    brief.approved_variants.clear()
+
+    await update.message.reply_text(
+        "Готово ✅ Щоб затвердити варіант, надішли /approve N (наприклад /approve 1)."
+    )
+
+    max_chunk = 3500
+    for i in range(0, len(result), max_chunk):
+        await update.message.reply_text(result[i:i + max_chunk])
+
+
+async def approve(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_user is None or update.message is None:
+        return
+
+    brief = get_user_brief(update.effective_user.id)
+    if not brief.generated_variants:
+        await update.message.reply_text("Немає згенерованих варіантів. Спочатку виконай /generate.")
+        return
+
+    if not context.args:
+        await update.message.reply_text("Вкажи номер: /approve 1")
+        return
+
+    arg = context.args[0].lower()
+    if arg == "all":
+        brief.approved_variants = list(brief.generated_variants)
+        await update.message.reply_text(f"Затверджено всі варіанти ({len(brief.approved_variants)}) ✅")
+        return
+
+    if not arg.isdigit():
+        await update.message.reply_text("Невірний формат. Використай /approve N або /approve all.")
+        return
+
+    index = int(arg) - 1
+    if index < 0 or index >= len(brief.generated_variants):
+        await update.message.reply_text(f"Номер поза діапазоном 1..{len(brief.generated_variants)}.")
+        return
+
+    selected = brief.generated_variants[index]
+    if selected not in brief.approved_variants:
+        brief.approved_variants.append(selected)
+    await update.message.reply_text(
+        f"Варіант {index + 1} затверджено ✅. Тепер можна викликати /carousel."
+    )
+
+
+async def carousel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    _ = context
+    if update.effective_user is None or update.message is None:
+        return
+
+    brief = get_user_brief(update.effective_user.id)
+    if not brief.approved_variants:
+        await update.message.reply_text("Немає затверджених креативів. Використай /approve N.")
+        return
+
+    model = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
+    try:
+        client = OpenAI(api_key=get_required_env("OPENAI_API_KEY"))
+        await update.message.reply_text("Генерую карусель із затверджених креативів... ⏳")
+        result = generate_carousel(client, model, brief)
+    except Exception as exc:
+        logger.exception("Failed to generate carousel")
+        await update.message.reply_text(f"Сталася помилка при генерації каруселі: {exc}")
+        return
+
+    if not result:
+        await update.message.reply_text("Модель повернула порожню відповідь для каруселі.")
+        return
+
     max_chunk = 3500
     for i in range(0, len(result), max_chunk):
         await update.message.reply_text(result[i:i + max_chunk])
@@ -229,6 +342,8 @@ def main() -> None:
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("new", new_brief))
     application.add_handler(CommandHandler("generate", generate))
+    application.add_handler(CommandHandler("approve", approve))
+    application.add_handler(CommandHandler("carousel", carousel))
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
