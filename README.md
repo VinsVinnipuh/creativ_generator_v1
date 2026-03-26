@@ -25,36 +25,3 @@
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-```
-
-### 2) Налаштуй змінні середовища
-
-Створи `.env` файл:
-
-```env
-TELEGRAM_BOT_TOKEN=your_telegram_bot_token
-OPENAI_API_KEY=your_openai_api_key
-OPENAI_MODEL=gpt-4.1-mini
-CREATIVE_VARIANTS=3
-```
-
-> `OPENAI_MODEL` можна змінити на іншу мультимодальну модель OpenAI.
-
-### 3) Запуск
-
-```bash
-python -m bot.main
-```
-
-## Приклад сценарію використання
-
-1. Надішли боту текст з описом продукту, ЦА, оферу.
-2. Надішли 1–5 фото-референсів.
-3. Введи `/generate`.
-4. Отримай кілька готових креативних концепцій у структурованому форматі.
-
-## Важливо
-
-- Передавай **лише публічну або дозволену до обробки інформацію**.
-- Зберігання стану зроблене в пам'яті процесу (`in-memory`). Для продакшену краще додати БД (Redis/PostgreSQL).
-
