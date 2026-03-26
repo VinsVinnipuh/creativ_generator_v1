@@ -99,12 +99,18 @@ async def _build_file_url(message: Message, context: ContextTypes.DEFAULT_TYPE) 
 
     photo = message.photo[-1]
     telegram_file = await context.bot.get_file(photo.file_id)
-    bot_token = get_required_env("TELEGRAM_BOT_TOKEN")
-    file_path = telegram_file.file_path
 
-    if not file_path:
+    if not telegram_file.file_path:
         raise ValueError("Telegram не повернув file_path.")
 
+    file_path = telegram_file.file_path
+
+    # Нові версії python-telegram-bot повертають вже повний URL
+    if file_path.startswith("http"):
+        return file_path
+
+    # Fallback для старих версій де file_path — відносний шлях
+    bot_token = get_required_env("TELEGRAM_BOT_TOKEN")
     return f"https://api.telegram.org/file/bot{bot_token}/{file_path}"
 
 
