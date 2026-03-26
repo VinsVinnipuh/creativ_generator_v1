@@ -1,3 +1,9 @@
+
+---
+
+## `bot/main.py`
+
+```python
 from __future__ import annotations
 
 import logging
@@ -51,6 +57,9 @@ def get_required_env(name: str) -> str:
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     _ = context
+    if update.message is None:
+        return
+
     await update.message.reply_text(
         "Привіт! Я допоможу згенерувати креативи для Instagram.\n\n"
         "1) Надішли текстовий бриф (можна кількома повідомленнями).\n"
@@ -64,16 +73,26 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def new_brief(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     _ = context
+    if update.effective_user is None or update.message is None:
+        return
+
     user_id = update.effective_user.id
     brief = get_user_brief(user_id)
     brief.reset()
-    await update.message.reply_text("Готово ✅ Контекст очищено. Надішли новий бриф і референси.")
+
+    await update.message.reply_text(
+        "Готово ✅ Контекст очищено. Надішли новий бриф і референси."
+    )
 
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     _ = context
+    if update.effective_user is None or update.message is None:
+        return
+
     user_id = update.effective_user.id
     brief = get_user_brief(user_id)
+
     text = (update.message.text or "").strip()
     if not text:
         return
@@ -83,24 +102,41 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 
 async def _build_file_url(message: Message, context: ContextTypes.DEFAULT_TYPE) -> str:
+    if not message.photo:
+        raise ValueError("У повідомленні немає фото.")
+
     photo = message.photo[-1]
     telegram_file = await context.bot.get_file(photo.file_id)
     bot_token = get_required_env("TELEGRAM_BOT_TOKEN")
+
     return f"https://api.telegram.org/file/bot{bot_token}/{telegram_file.file_path}"
 
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_user is None or update.message is None:
+        return
+
     user_id = update.effective_user.id
     brief = get_user_brief(user_id)
 
-    file_url = await _build_file_url(update.message, context)
-    brief.image_urls.append(file_url)
+    try:
+        file_url = await _build_file_url(update.message, context)
+    except Exception as exc:
+        logger.exception("Failed to process photo")
+        await update.message.reply_text(f"Не вдалося обробити фото: {exc}")
+        return
 
+    brief.image_urls.append(file_url)
     await update.message.reply_text("Фото-референс додано ✅")
 
 
 def build_openai_prompt(brief: UserBrief, variants: int) -> str:
-    text_block = "\n".join(f"- {item}" for item in brief.texts) if brief.texts else "- (немає текстового брифу)"
+    text_block = (
+        "\n".join(f"- {item}" for item in brief.texts)
+        if brief.texts
+        else "- (немає текстового брифу)"
+    )
+
     return (
         "Ти senior creative strategist для Instagram. "
         "На базі брифу та візуальних референсів створи декілька варіантів креативів.\n\n"
@@ -120,7 +156,12 @@ def build_openai_prompt(brief: UserBrief, variants: int) -> str:
 
 
 def generate_creatives(client: OpenAI, model: str, brief: UserBrief, variants: int) -> str:
-    content: List[dict] = [{"type": "input_text", "text": build_openai_prompt(brief, variants)}]
+    content: List[dict] = [
+        {
+            "type": "input_text",
+            "text": build_openai_prompt(brief, variants),
+        }
+    ]
 
     for image_url in brief.image_urls:
         content.append(
@@ -140,6 +181,9 @@ def generate_creatives(client: OpenAI, model: str, brief: UserBrief, variants: i
 
 async def generate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     _ = context
+    if update.effective_user is None or update.message is None:
+        return
+
     user_id = update.effective_user.id
     brief = get_user_brief(user_id)
 
@@ -162,12 +206,14 @@ async def generate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     if not result:
-        await update.message.reply_text("Модель повернула порожню відповідь. Спробуй уточнити бриф.")
+        await update.message.reply_text(
+            "Модель повернула порожню відповідь. Спробуй уточнити бриф."
+        )
         return
 
     max_chunk = 3500
     for i in range(0, len(result), max_chunk):
-        await update.message.reply_text(result[i : i + max_chunk])
+        await update.message.reply_text(result[i:i + max_chunk])
 
 
 def main() -> None:
