@@ -54,11 +54,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     await update.message.reply_text(
         "Привіт! Я допоможу згенерувати креативи для Instagram.\n\n"
-        "1) Надішли текстовий бриф.\n"
+        "1) Надішли текстовий бриф (можна кількома повідомленнями).\n"
         "2) Надішли фото-референси.\n"
-        "3) Виконай /generate.\n\n"
+        "3) Виконай /generate для отримання варіантів.\n\n"
         "Команди:\n"
-        "/new — очистити контекст\n"
+        "/new — очистити поточний контекст\n"
         "/generate — згенерувати креативи"
     )
 
@@ -68,9 +68,13 @@ async def new_brief(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.effective_user is None or update.message is None:
         return
 
-    brief = get_user_brief(update.effective_user.id)
+    user_id = update.effective_user.id
+    brief = get_user_brief(user_id)
     brief.reset()
-    await update.message.reply_text("Готово ✅ Контекст очищено.")
+
+    await update.message.reply_text(
+        "Готово ✅ Контекст очищено. Надішли новий бриф і референси."
+    )
 
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -78,11 +82,13 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if update.effective_user is None or update.message is None:
         return
 
+    user_id = update.effective_user.id
+    brief = get_user_brief(user_id)
+
     text = (update.message.text or "").strip()
     if not text:
         return
 
-    brief = get_user_brief(update.effective_user.id)
     brief.texts.append(text)
     await update.message.reply_text("Текст додано до брифу ✅")
 
@@ -106,7 +112,8 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if update.effective_user is None or update.message is None:
         return
 
-    brief = get_user_brief(update.effective_user.id)
+    user_id = update.effective_user.id
+    brief = get_user_brief(user_id)
 
     try:
         file_url = await _build_file_url(update.message, context)
@@ -121,28 +128,36 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 def build_openai_prompt(brief: UserBrief, variants: int) -> str:
-    text_block = "\n".join(f"- {item}" for item in brief.texts) if brief.texts else "- (немає текстового брифу)"
+    text_block = (
+        "\n".join(f"- {item}" for item in brief.texts)
+        if brief.texts
+        else "- (немає текстового брифу)"
+    )
+
     return (
         "Ти senior creative strategist для Instagram. "
         "На базі брифу та візуальних референсів створи декілька варіантів креативів.\n\n"
         f"Кількість варіантів: {variants}.\n"
-        "Для кожного варіанту дай:\n"
+        "Вимоги до кожного варіанту:\n"
         "1) Назва ідеї\n"
-        "2) Головний хук\n"
+        "2) Головний хук (1 речення)\n"
         "3) Текст на креативі (до 15 слів)\n"
-        "4) Короткий caption\n"
-        "5) Візуальна концепція\n"
+        "4) Короткий caption для поста (до 300 символів)\n"
+        "5) Візуальна концепція: композиція, кольори, стиль\n"
         "6) CTA\n"
-        "7) Чому це спрацює\n\n"
+        "7) Чому це спрацює для ЦА\n\n"
         "Бриф користувача:\n"
         f"{text_block}\n\n"
-        "Відповідай українською мовою."
+        "Відповідай українською мовою. Форматуй чітко, з заголовками."
     )
 
 
 def generate_creatives(client: OpenAI, model: str, brief: UserBrief, variants: int) -> str:
-    content = [
-        {"type": "input_text", "text": build_openai_prompt(brief, variants)}
+    content: List[dict] = [
+        {
+            "type": "input_text",
+            "text": build_openai_prompt(brief, variants),
+        }
     ]
 
     for image_url in brief.image_urls:
@@ -168,11 +183,12 @@ async def generate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.effective_user is None or update.message is None:
         return
 
-    brief = get_user_brief(update.effective_user.id)
+    user_id = update.effective_user.id
+    brief = get_user_brief(user_id)
 
     if not brief.texts and not brief.image_urls:
         await update.message.reply_text(
-            "Поки немає даних для генерації. Надішли текст і/або фото."
+            "Поки немає даних для генерації. Надішли текст брифу та/або фото-референси."
         )
         return
 
@@ -189,7 +205,9 @@ async def generate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     if not result:
-        await update.message.reply_text("Модель повернула порожню відповідь.")
+        await update.message.reply_text(
+            "Модель повернула порожню відповідь. Спробуй уточнити бриф."
+        )
         return
 
     max_chunk = 3500
