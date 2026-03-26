@@ -1,0 +1,4 @@
+{
+  "$schema": "https://railpack.com/schema.json",
+  "startCommand": "python -m bot.main"
+}
