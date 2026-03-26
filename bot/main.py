@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import logging
 import os
 from dataclasses import dataclass, field
@@ -102,8 +100,12 @@ async def _build_file_url(message: Message, context: ContextTypes.DEFAULT_TYPE) 
     photo = message.photo[-1]
     telegram_file = await context.bot.get_file(photo.file_id)
     bot_token = get_required_env("TELEGRAM_BOT_TOKEN")
+    file_path = telegram_file.file_path
 
-    return f"https://api.telegram.org/file/bot{bot_token}/{telegram_file.file_path}"
+    if not file_path:
+        raise ValueError("Telegram не повернув file_path.")
+
+    return f"https://api.telegram.org/file/bot{bot_token}/{file_path}"
 
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -115,12 +117,13 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     try:
         file_url = await _build_file_url(update.message, context)
+        logger.info("Saved image URL: %s", file_url)
+        brief.image_urls.append(file_url)
     except Exception as exc:
         logger.exception("Failed to process photo")
         await update.message.reply_text(f"Не вдалося обробити фото: {exc}")
         return
 
-    brief.image_urls.append(file_url)
     await update.message.reply_text("Фото-референс додано ✅")
 
 
@@ -164,6 +167,8 @@ def generate_creatives(client: OpenAI, model: str, brief: UserBrief, variants: i
                 "image_url": image_url,
             }
         )
+
+    logger.info("Sending image URLs to OpenAI: %s", brief.image_urls)
 
     response = client.responses.create(
         model=model,
@@ -212,7 +217,6 @@ async def generate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 def main() -> None:
     load_dotenv()
-
     telegram_token = get_required_env("TELEGRAM_BOT_TOKEN")
 
     application = Application.builder().token(telegram_token).build()
